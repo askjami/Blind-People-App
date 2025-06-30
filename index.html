@@ -1,29 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Smart Blind Navigation Assistant</title>
+  <meta charset="UTF-8" />
+  <title>Blind Navigation Assistant (Fixed)</title>
   <style>
-    body {
-      background: #000;
-      color: #fff;
-      font-family: sans-serif;
-      text-align: center;
-      padding: 1em;
-    }
-    video {
-      width: 100%;
-      max-width: 640px;
-      border: 2px solid white;
-      margin-bottom: 1em;
-    }
-    button {
-      padding: 10px 20px;
-      margin: 5px;
-    }
-    #status {
-      margin-top: 10px;
-    }
+    body { background: #000; color: #fff; font-family: sans-serif; text-align: center; }
+    video { width: 100%; max-width: 640px; border: 3px solid white; margin: 10px; }
+    button { padding: 10px 20px; margin: 5px; font-size: 1em; }
+    #status { margin-top: 10px; font-size: 1.2em; }
   </style>
 </head>
 <body>
@@ -36,41 +20,43 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-
   <script>
     const video = document.getElementById('video');
     const status = document.getElementById('status');
-    let model, stream, detecting = false;
-    let usingFrontCamera = false;
-    let lastDetectedObjects = [];
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    // 🧠 Speak
+    let model, stream, detecting = false;
+    let usingFrontCamera = false;
+    let lastDetectedObjects = [];
+
+    // Speak text aloud
     function speak(text) {
       window.speechSynthesis.cancel();
       const msg = new SpeechSynthesisUtterance(text);
       window.speechSynthesis.speak(msg);
     }
 
-    // 🎥 Camera Setup
+    // Setup camera
     async function setupCamera() {
-      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (stream) stream.getTracks().forEach(track => track.stop());
+
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: usingFrontCamera ? 'user' : 'environment' },
         audio: false
       });
+
       video.srcObject = stream;
       return new Promise(resolve => {
         video.onloadedmetadata = () => resolve();
       });
     }
 
-    // 🎤 Voice Control
+    // Voice input handler
     function startListening() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
-        alert("Speech recognition not supported in this browser.");
+        speak("Speech recognition is not supported in this browser.");
         return;
       }
 
@@ -81,28 +67,30 @@
 
       recognition.onresult = (event) => {
         const query = event.results[0][0].transcript.toLowerCase();
-        console.log("User asked:", query);
+        console.log("User said:", query);
         respondToQuery(query);
       };
-      recognition.onerror = (e) => {
-        console.error('Mic error:', e);
+      recognition.onerror = (err) => {
+        console.error("Mic error:", err);
         speak("Sorry, I didn't catch that.");
       };
 
       recognition.start();
-      speak("I'm listening...");
+      speak("Listening...");
     }
 
-    // 🤖 Respond to questions
+    // Understand questions and respond
     function respondToQuery(query) {
       const objSet = new Set(lastDetectedObjects);
 
-      if (query.includes("see a wall") || query.includes("any obstacle")) {
+      // General obstacle detection
+      if (query.includes("obstacle") || query.includes("wall") || query.includes("ahead")) {
         checkObstacle();
         return;
       }
 
-      const keywords = ['car', 'bus', 'person', 'bicycle', 'motorcycle'];
+      // Check for specific object types
+      const keywords = ["person", "car", "bus", "bicycle", "motorcycle", "dog", "cat", "chair"];
       const found = keywords.find(k => query.includes(k));
       if (found) {
         if (objSet.has(found)) {
@@ -113,45 +101,53 @@
         return;
       }
 
-      speak("I'm not sure how to answer that.");
+      // If nothing matches
+      speak("I heard you, but I'm not sure how to answer that.");
     }
 
-    // 🚧 Check basic obstacle
+    // Basic obstacle approximation
     function checkObstacle() {
-      const imageData = ctx.getImageData(canvas.width/2 - 50, canvas.height/2 - 50, 100, 100).data;
+      const imageData = ctx.getImageData(canvas.width / 2 - 50, canvas.height / 2 - 50, 100, 100).data;
       let brightness = 0;
       for (let i = 0; i < imageData.length; i += 4) {
-        brightness += (imageData[i] + imageData[i+1] + imageData[i+2]) / 3;
+        brightness += (imageData[i] + imageData[i + 1] + imageData[i + 2]) / 3;
       }
       const avg = brightness / (imageData.length / 4);
       if (avg < 60) {
-        speak("Warning, there is something very close ahead.");
+        speak("Warning: Something is very close in front of you.");
       } else {
-        speak("The way ahead looks clear.");
+        speak("The path ahead looks clear.");
       }
     }
 
-    // 🎯 Object detection loop
+    // Object detection loop
     async function detectFrame() {
-      if (!detecting) return;
+      if (!detecting || video.readyState < 2) {
+        requestAnimationFrame(detectFrame);
+        return;
+      }
+
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       const predictions = await model.detect(canvas);
       lastDetectedObjects = predictions.map(p => p.class);
-      const closeObjects = predictions.filter(p => p.bbox[2] > 100 && p.bbox[3] > 100).map(p => p.class);
-      if (closeObjects.includes("car") || closeObjects.includes("bus")) {
-        speak("Caution, a vehicle is very close.");
-      }
+
+      const visibleObjects = [...new Set(lastDetectedObjects)];
+      status.innerText = "Detected: " + (visibleObjects.length > 0 ? visibleObjects.join(", ") : "none");
 
       requestAnimationFrame(detectFrame);
     }
 
     async function toggleDetection() {
       detecting = !detecting;
-      status.innerText = detecting ? "Detecting objects..." : "Paused.";
-      if (detecting) detectFrame();
+      if (detecting) {
+        speak("Starting detection.");
+        detectFrame();
+      } else {
+        speak("Detection stopped.");
+      }
     }
 
     async function switchCamera() {
@@ -160,11 +156,12 @@
       if (detecting) detectFrame();
     }
 
-    // 🧠 Initialize
+    // Initialize app
     (async () => {
       await setupCamera();
       model = await cocoSsd.load();
-      status.innerText = "Ready. Press 'Toggle Detection' to begin.";
+      speak("Model loaded. Ready to assist.");
+      status.innerText = "Ready. Tap 'Toggle Detection' to begin.";
     })();
   </script>
 </body>
